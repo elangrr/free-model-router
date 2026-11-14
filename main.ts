@@ -96,6 +96,23 @@ interface CallResult {
   message: string;
 }
 
+/**
+ * The human-readable message of a provider's error body, in any of the three envelopes. Only the message
+ * is read: a status code such as RESOURCE_EXHAUSTED names the error family, not whether the tier is spent.
+ */
+function errorMessage(text: string): string {
+  try {
+    const body: unknown = JSON.parse(text);
+    if (isRecord(body)) {
+      if (isRecord(body.error) && typeof body.error.message === 'string') return body.error.message;
+      if (typeof body.message === 'string') return body.message;
+    }
+  } catch {
+    // Not JSON: fall through to the raw text.
+  }
+  return text.slice(0, 500);
+}
+
 /** One provider call, in the provider's own format and auth scheme. */
 async function callProvider(api: ClientApi, body: Json, c: Candidate): Promise<CallResult> {
   const call = buildUpstream(api, body, c.provider.wire, c.model);
@@ -113,7 +130,7 @@ async function callProvider(api: ClientApi, body: Json, c: Candidate): Promise<C
       const answer = parseAnswer(c.provider.wire, text);
       return { answer, status: res.status, message: answer === null ? 'the provider answered no completion' : '' };
     }
-    return { answer: null, status: res.status, message: text.slice(0, 2000) };
+    return { answer: null, status: res.status, message: errorMessage(text) };
   } catch (err) {
     return { answer: null, status: 0, message: (err as Error).message };
   }
@@ -140,11 +157,11 @@ async function chat(api: ClientApi, req: IncomingMessage, res: ServerResponse): 
     noMaxTokens: api === 'openai' && typeof body.max_tokens !== 'number' && typeof body.max_completion_tokens !== 'number',
   };
 
-  const tried = new Set<string>();
-  for (;;) {
-    const c = router.pick(index, job, tried);
+  // Providers that cannot serve this request: ones that failed it for a reason other than quota.
+  const ruledOut = new Set<string>();
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const c = router.pick(index, job, ruledOut);
     if (c === null) break;
-    tried.add(c.provider.id);
     const result = await callProvider(api, body, c);
     if (result.answer !== null) {
       router.served(index, weight, c);
@@ -156,6 +173,7 @@ async function chat(api: ClientApi, req: IncomingMessage, res: ServerResponse): 
     log(`${job.item.id}: ${c.provider.id}/${c.model} answered ${result.status}: ${result.message.slice(0, 160)}`);
     // A quota refusal says something about the provider; anything else only rules it out for this request.
     if (result.status === 402 || result.status === 429) router.refused(c, result.message);
+    else ruledOut.add(c.provider.id);
   }
   router.unserved(index, weight);
   sendError(res, api, 503, api === 'anthropic' ? 'overloaded_error' : 'no_free_model', 'no free model could answer this request');
