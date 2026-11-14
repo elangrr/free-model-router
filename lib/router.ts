@@ -48,8 +48,11 @@ const ALLOWANCES: Record<string, [number, number]> = {
   kilol: [12, 16],
 };
 const DEFAULT_ALLOWANCE: [number, number] = [4, 6];
-/** Extra risk on a provider's second call while it has refused nothing yet. */
-const SECOND_CALL_RISK = 0.1;
+/**
+ * Extra risk on a provider's second call while it has refused nothing yet. Kept small: measured over
+ * many drawn schedules, a larger value pushes requests off good providers without saving calls.
+ */
+const SECOND_CALL_RISK = 0.03;
 
 /** Prices on quality loss to try, lowest first: risk per rating point, per unit of request weight. */
 const PRICES: number[] = [0];
